@@ -1,0 +1,10 @@
+{
+  "environments": [
+    {
+      "name": "Manual",
+      "spaClientId": "",
+      "tenantId": "",
+      "apiScope": ""
+    }
+  ]
+}

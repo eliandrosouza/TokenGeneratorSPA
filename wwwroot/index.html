@@ -1,0 +1,345 @@
+﻿<!doctype html>
+<html lang="pt">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Token Helper - Azure AD (MSAL.js)</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+            margin: 24px;
+        }
+
+        h1 {
+            margin: 0 0 12px;
+            font-size: 22px;
+        }
+
+        .row {
+            margin: 10px 0;
+        }
+
+        button {
+            margin-right: 8px;
+            padding: 8px 12px;
+            border-radius: 8px;
+            border: 1px solid #ccc;
+            cursor: pointer;
+        }
+
+        pre, code, .box {
+            background: #f6f8fa;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 12px;
+            overflow: auto;
+        }
+
+        .cols {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-top: 16px;
+        }
+
+        label {
+            font-weight: 600;
+            display: block;
+            margin-top: 8px;
+        }
+
+        input[type=text] {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+        }
+
+        small {
+            color: #6b7280;
+        }
+    </style>
+</head>
+<body>
+    <h1>Token Helper (SPA MSAL.js)</h1>
+    <p>As configurações são lidas de <code>config/environments.json</code>. Selecione um ambiente para preencher os campos automaticamente.</p>
+
+
+    <div class="box">
+        <div class="flex">
+            <label for="envSelect" style="margin:0;">Ambiente</label>
+            <select id="envSelect"></select>
+            <button id="reloadBtn" title="Recarregar JSON">Recarregar JSON</button>
+            <button id="saveDefaultBtn" title="Salvar como padrão">Salvar como padrão</button>
+            <span id="status" class="muted"></span>
+        </div>
+        <small>Edite o arquivo em: wwwroot/config/environments.json.</small>
+    </div>
+    <br />
+    <div class="box">
+        <label>Client ID</label>
+        <input id="spaClientId" type="text" value="" />
+        <label>Tenant ID</label>
+        <input id="tenantId" type="text" value="" />
+        <label>API Scope</label>
+        <input id="apiScope" type="text" value="" />
+    </div>
+
+    <div class="row">
+        <button id="loginBtn">Login</button>
+        <button id="logoutBtn">Logout</button>
+        <button id="clearBtn">Limpar</button>
+    </div>
+
+    <div class="rows">
+        <div>
+            <h3>ID Token</h3><button id="botao-copiar">Copiar token</button>
+            <pre id="idClaims">(faça login...)</pre>
+            <textarea id="hidden-idtoken" style="position: absolute; left: -9999px;"></textarea>
+        </div>
+        <div>
+            <h3>Access Token (payload decodificado)</h3>
+            <pre id="accessPayload">(faça login...)</pre>
+        </div>
+    </div>
+
+    <h3>Notas</h3>
+    <ul>
+        <li>No AzureAD).</li>
+        <li>Garanta que o App Registration da SPA tem plataforma <b>Single-page application</b> com redirect <code>http://localhost:3000</code>.</li>
+        <li>Para <b>roles</b> no token: defina App Roles na <b>API</b> e atribua o usuário/grupo em <i>Enterprise applications</i>.</li>
+    </ul>
+
+    <!-- Carregue a MSAL <ANTES> do seu script -->
+    <script type="text/javascript" src="https://alcdn.msauth.net/browser/2.35.0/js/msal-browser.min.js"></script>
+    <script>
+        const $ = (id) => document.getElementById(id);
+
+        let ENVIRONMENTS = [];
+        const STATUS = $('status');
+
+        // Fallback local (caso JSON falhe)
+        const DEFAULT_ENVIRONMENTS = [
+            {
+                name: "Exemplo Fallback (GUID API)",
+                spaClientId: "00000000-0000-0000-0000-000000000000",
+                tenantId: "00000000-0000-0000-0000-000000000000",
+                apiScope: "api://erro/.default"
+            }
+        ];
+
+        async function loadEnvironments() {
+            try {
+                STATUS.textContent = "Carregando environments.json...";
+                const resp = await fetch("config/environments.json", { cache: "no-store" });
+                if (!resp.ok) throw new Error("HTTP " + resp.status);
+                const data = await resp.json();
+                if (!data || !Array.isArray(data.environments)) throw new Error("Estrutura inválida");
+                ENVIRONMENTS = data.environments;
+                STATUS.textContent = "Ambientes carregados (" + ENVIRONMENTS.length + ")";
+            } catch (e) {
+                console.warn("Falha ao carregar environments.json:", e);
+                ENVIRONMENTS = DEFAULT_ENVIRONMENTS;
+                STATUS.textContent = "Falha ao carregar JSON; usando fallback local.";
+            }
+            buildDropdown();
+        }
+
+        function buildDropdown() {
+            const select = $('envSelect');
+            select.innerHTML = "";
+            ENVIRONMENTS.forEach((env, idx) => {
+                const opt = document.createElement('option');
+                opt.value = idx.toString();
+                opt.textContent = env.name || ("Env " + (idx + 1));
+                select.appendChild(opt);
+            });
+            const saved = localStorage.getItem("tokenhelper.defaultEnvIndex");
+            if (saved && ENVIRONMENTS[+saved]) {
+                select.value = saved;
+                applyEnv(+saved);
+            } else {
+                select.value = "0";
+                applyEnv(0);
+            }
+        }
+
+        function applyEnv(index) {
+            const env = ENVIRONMENTS[index];
+            if (!env) return;
+            $('spaClientId').value = env.spaClientId || "";
+            $('tenantId').value = env.tenantId || "";
+            $('apiScope').value = env.apiScope || "";
+        }
+
+        function saveDefaultEnv() {
+            const idx = $('envSelect').value;
+            localStorage.setItem("tokenhelper.defaultEnvIndex", idx);
+            alert("Ambiente salvo como padrão.");
+        }
+
+        function b64urlToJson(b64url) {
+            const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
+            const json = atob(b64);
+            try { return JSON.parse(decodeURIComponent(escape(json))); } catch { return JSON.parse(json); }
+        }
+        function decodeJwt(jwt) {
+            const parts = jwt.split('.');
+            if (parts.length !== 3) return {};
+            return b64urlToJson(parts[1]);
+        }
+        function out(el, obj) { el.textContent = typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2); }
+        function requireMsal() {
+            if (!window.msal || !window.msal.PublicClientApplication) {
+                alert("msal-browser.min.js não encontrado. Baixe e coloque em wwwroot/js/.");
+                throw new Error("MSAL não carregado");
+            }
+        }
+
+        // Estado MSAL
+        let msalInstance = null;
+
+        function buildMsal() {
+            requireMsal();
+            const spaClientId = $('spaClientId').value.trim();
+            const tenantId = $('tenantId').value.trim();
+            if (!spaClientId || !tenantId) {
+                alert("Preencha SPA Client ID e Tenant ID");
+                throw new Error("Config incompleta");
+            }
+            msalInstance = new msal.PublicClientApplication({
+                auth: {
+                    clientId: spaClientId,
+                    authority: "https://login.microsoftonline.com/" + tenantId,
+                    redirectUri: "http://localhost:3000"
+                },
+                cache: { cacheLocation: "localStorage" }
+            });
+        }
+
+        async function ensureAccount() {
+            const all = msalInstance.getAllAccounts();
+            if (all.length) { msalInstance.setActiveAccount(all[0]); return all[0]; }
+            return null;
+        }
+
+        async function login() {
+            buildMsal();
+            try {
+                await msalInstance.loginRedirect({ scopes: ["openid", "profile", "offline_access"] });
+            } catch (e) { console.error(e); alert("Erro no login: " + e.message); }
+        }
+
+        // Handle redirect on load
+        window.addEventListener('load', async () => {
+            $('reloadBtn').addEventListener('click', loadEnvironments);
+            $('saveDefaultBtn').addEventListener('click', saveDefaultEnv);
+            $('envSelect').addEventListener('change', (e) => applyEnv(+e.target.value));
+
+            await loadEnvironments();
+
+            if (!window.msal) return;
+            try {
+                await buildMsal();
+            } catch { return; }
+            const resp = await msalInstance.handleRedirectPromise();
+            if (resp) msalInstance.setActiveAccount(resp.account);
+            const account = await ensureAccount();
+            if (account) {
+                const claims = account.idTokenClaims || {};
+                out($('idClaims'), {
+                    preferred_username: claims.preferred_username,
+                    token: resp.idToken,
+                });
+                out($('accessPayload'), resp.idTokenClaims);
+                out($('hidden-idtoken'), resp.idToken);
+            }
+        });
+
+        async function getGraphToken() {
+            try {
+                const account = await ensureAccount();
+                if (!account) { alert("Faça login primeiro."); return; }
+                const result = await msalInstance.acquireTokenSilent({
+                    scopes: [$('apiScope').value.trim()],
+                    account
+                }).catch(() => msalInstance.acquireTokenPopup({
+                    scopes: [$('apiScope').value.trim()],
+                    account
+                }));
+                const payload = decodeJwt(result.accessToken);
+                out($('accessPayload'), payload);
+            } catch (e) { console.error(e); alert("Erro ao obter token Graph: " + e.message); }
+        }
+
+        async function getApiToken(customScope = null) {
+            try {
+                const account = await ensureAccount();
+                if (!account) { alert("Faça login primeiro."); return; }
+                const scopeFromInput = $('apiScope').value.trim();
+                const scope = customScope || scopeFromInput; // || defaultScope;
+                const result = await msalInstance.acquireTokenSilent({
+                    scopes: [scope],
+                    account
+                }).catch(() => msalInstance.acquireTokenPopup({
+                    scopes: [scope],
+                    account
+                }));
+                const payload = decodeJwt(result.accessToken);
+                out($('accessPayload'), result);
+            } catch (e) { console.error(e); alert("Erro ao obter token da API: " + e.message); }
+        }
+
+        async function logout() {
+            try {
+                const account = msalInstance.getActiveAccount() || (msalInstance.getAllAccounts()[0] || null);
+                await msalInstance.logoutRedirect({ account });
+                $('idClaims').textContent = "(faça login...)";
+                $('accessPayload').textContent = "(gere um token...)";
+            } catch (e) { console.error(e); alert("Erro no logout: " + e.message); }
+        }
+
+        function clearBoxes() {
+            $('idClaims').textContent = "(faça login...)";
+            $('accessPayload').textContent = "(gere um token...)";
+        }
+
+        // Eventos
+        $('loginBtn').addEventListener('click', login);
+        $('logoutBtn').addEventListener('click', logout);
+        //$('getGraphBtn').addEventListener('click', getGraphToken);
+        //$('getApiBtn').addEventListener('click', () => getApiToken());
+        //$('getApiDefaultBtn').addEventListener('click', () => getApiToken($('apiScope').value.trim()));
+        $('clearBtn').addEventListener('click', clearBoxes);
+
+        const botaoCopiar = document.getElementById('botao-copiar');
+        const hiddenTextarea = document.getElementById('hidden-idtoken');
+
+        botaoCopiar.addEventListener('click', () => {
+            // Copia o texto da div para a textarea oculta
+            hiddenTextarea.select(); // Seleciona o texto
+
+            // Tenta copiar usando a API moderna do Clipboard
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(hiddenTextarea.value)
+                    .then(() => {
+                        console.log('Conteúdo copiado para a área de transferência!');
+                        // Opcional: mostrar uma mensagem de sucesso para o usuário
+                    })
+                    .catch(err => {
+                        console.error('Falha ao copiar conteúdo: ', err);
+                    });
+            } else {
+                // Fallback para navegadores mais antigos (execCommand)
+                try {
+                    document.execCommand('copy');
+                    console.log('Conteúdo copiado com execCommand!');
+                } catch (err) {
+                    console.error('Falha ao copiar conteúdo com execCommand: ', err);
+                }
+            }
+        });
+    </script>
+</body>
+</html>
