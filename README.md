@@ -1,5 +1,5 @@
 # Introduction 
-Aplicação para simular uma aplicação react, efetuar login em um tenant configurável e retornar o token JWT para utilização em backend
+Simula uma aplicação web e efetua login no Microsoft Entra e retornar o token JWT para utilização em apps backend
 
 # Getting Started
 1.	Clone repo
